@@ -1,0 +1,3 @@
+numpy
+pyarrow
+rerun-sdk>=0.33

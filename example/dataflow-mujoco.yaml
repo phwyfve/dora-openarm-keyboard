@@ -53,8 +53,8 @@ nodes:
     path: dora-openarm-mujoco
     args: "--scene demo --keyframe home --enable-collision --ctrl --render --viewer --debug-frame"
     inputs:
-      position_right: ik/position_right
-      position_left: ik/position_left
+      move_position_right: ik/position_right
+      move_position_left: ik/position_left
       pose_right: keyboard/pose_right
       pose_left: keyboard/pose_left
     outputs:

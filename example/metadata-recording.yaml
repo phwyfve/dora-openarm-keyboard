@@ -1,0 +1,21 @@
+location: MuJoCo simulation
+operator: Keyboard operator
+
+tasks:
+  - prompt: Pick and place an object.
+    description: Pick up an object from the table and place it at the target location.
+
+equipment:
+  id: OpenArm-MuJoCo-keyboard
+  version: "1.0"
+  embodiments:
+    arms:
+      id: OpenArm
+      version: "2.0"
+  perceptions:
+    cameras:
+      wrist_right: {}
+      wrist_left: {}
+      head_left: {}
+      head_right: {}
+      ceiling: {}

@@ -1,0 +1,137 @@
+# Keep the working keyboard -> IK -> MuJoCo path; record its joint commands
+# alongside sampled robot states and all five simulated cameras.
+nodes:
+  - id: ui
+    build: pip install -e ../../dora-openarm-data-collection/nodes/dora-openarm-data-collection-ui
+    path: dora-openarm-data-collection-ui
+    args: "--port 8000 --no-auto-open"
+    env:
+      METADATA_FILE: metadata-recording.yaml
+    inputs:
+      tick: quittable-tick/tick
+      camera_wrist_right:
+        source: viewer/camera_wrist_right
+        queue_size: 1
+      camera_wrist_left:
+        source: viewer/camera_wrist_left
+        queue_size: 1
+      camera_head_left:
+        source: viewer/camera_head_left
+        queue_size: 1
+      camera_head_right:
+        source: viewer/camera_head_right
+        queue_size: 1
+      camera_ceiling:
+        source: viewer/camera_ceiling
+        queue_size: 1
+    outputs:
+      - command
+      - arm_command
+
+  - id: keyboard
+    build: pip install -e ..
+    path: dora-openarm-keyboard
+    args: "--port 8080"
+    inputs:
+      image: viewer/camera_ceiling
+    outputs:
+      - pose_right
+      - pose_left
+      - command
+      - status
+
+  - id: ik
+    build: pip install dora-openarm-kinematics==0.2.4
+    path: dora-openarm-ik
+    inputs:
+      target_right: keyboard/pose_right
+      target_left: keyboard/pose_left
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: quittable-tick
+    path: ../../dora-openarm-data-collection/nodes/dora-openarm-quitter/src/dora_openarm_quitter/main.py
+    inputs:
+      command:
+        source: ui/command
+        queue_size: 100
+      tick: dora/timer/millis/4
+    outputs:
+      - tick
+
+  - id: quittable-controls
+    path: ../../dora-openarm-data-collection/nodes/dora-openarm-quitter/src/dora_openarm_quitter/main.py
+    inputs:
+      command:
+        source: ui/command
+        queue_size: 100
+      position_right: ik/position_right
+      position_left: ik/position_left
+      pose_right: keyboard/pose_right
+      pose_left: keyboard/pose_left
+    outputs:
+      - position_right
+      - position_left
+      - pose_right
+      - pose_left
+
+  - id: viewer
+    build: pip install dora-openarm-mujoco==0.5.1
+    path: dora-openarm-mujoco
+    args: "--scene demo --keyframe home --enable-collision --ctrl --render --viewer --debug-frame"
+    inputs:
+      move_position_right: quittable-controls/position_right
+      move_position_left: quittable-controls/position_left
+      pose_right: quittable-controls/pose_right
+      pose_left: quittable-controls/pose_left
+      request_state: quittable-tick/tick
+    outputs:
+      - status
+      - state_right
+      - state_left
+      - camera_wrist_right
+      - camera_wrist_left
+      - camera_head_left
+      - camera_head_right
+      - camera_ceiling
+
+  - id: recorder
+    build: pip install -e ../../dora-openarm-dataset-recorder
+    path: dora-openarm-dataset-recorder
+    env:
+      METADATA_FILE: metadata-recording.yaml
+      DIRECTORY: "${RECORDING_DIRECTORY:-data/keyboard-mujoco}"
+      NAME: "${RECORDING_NAME:-dataset}"
+    inputs:
+      command:
+        source: ui/command
+        queue_size: 100
+      arm_right_action:
+        source: ik/position_right
+        queue_size: 100
+      arm_left_action:
+        source: ik/position_left
+        queue_size: 100
+      arm_right_observation:
+        source: viewer/state_right
+        queue_size: 100
+      arm_left_observation:
+        source: viewer/state_left
+        queue_size: 100
+      camera_wrist_right:
+        source: viewer/camera_wrist_right
+        queue_size: 30
+      camera_wrist_left:
+        source: viewer/camera_wrist_left
+        queue_size: 30
+      camera_head_left:
+        source: viewer/camera_head_left
+        queue_size: 30
+      camera_head_right:
+        source: viewer/camera_head_right
+        queue_size: 30
+      camera_ceiling:
+        source: viewer/camera_ceiling
+        queue_size: 30

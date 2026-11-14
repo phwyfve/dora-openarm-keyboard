@@ -49,3 +49,4 @@ uv.lock
 
 /example/MUJOCO_LOG.TXT
 /example/out/
+/example/data/

@@ -66,6 +66,51 @@ from another machine, pass `--host 0.0.0.0` and open `http://<node-host>:8080/`
 (browsers allow WebRTC on plain HTTP; camera/mic-free pages like this one need
 no HTTPS).
 
+## Recording a simulated episode
+
+```text
+Browser :8080 -> Keyboard -> poses -> IK -> joint targets -+-> MuJoCo
+                                                         |      |
+                                                         v      v
+                                                     Recorder <- states + 5 cameras
+                                                         ^
+Collection UI :8000 -------- start / success / fail -------+
+                                                         |
+                                                      Dataset -> Rerun: images + curves
+```
+
+Windows / PowerShell, with the sibling collection and recorder repositories in
+`C:\_sim-test`. Keep the working Python 3.11 / `ml-sim` environment.
+
+**Record** (use a new session name on every launch):
+```powershell
+conda activate ml-sim
+cd C:\_sim-test\dora-openarm-keyboard
+git -C ..\dora-openarm-data-collection submodule update --init nodes/dora-openarm-data-collection-ui nodes/dora-openarm-quitter
+Remove-Item Env:RECORDING_DIRECTORY -ErrorAction SilentlyContinue
+$env:RECORDING_NAME = "session_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+uv run dora build example\dataflow-mujoco-recording.yaml --uv
+uv run dora run example\dataflow-mujoco-recording.yaml --uv
+```
+
+1. [Collection :8000](http://localhost:8000/): **Start!**.
+2. [Keyboard :8080](http://localhost:8080/): focus the page, move the arms.
+3. Collection: **Success!** / **Fail!** saves; **Cancel!** deletes.
+4. **Quit** on the collection page closes the flow. Escape only quits the keyboard.
+
+**View** (from the same repository; replace `session_...` with your saved folder):
+```powershell
+uv pip install --python .venv\Scripts\python.exe -r example\requirements-viewer.txt
+$dataset = "example\data\keyboard-mujoco\session_..."
+.\.venv\Scripts\python.exe example\view-recording.py $dataset --episode 0
+.\.venv\Scripts\rerun.exe "$dataset\episode_0.rrd"
+```
+
+Rerun shows original timestamps: no resampling or invented frames.
+Actions = IK `qpos`; observations = MuJoCo `qpos/qvel/qtorque`; images = JPEG.
+250 Hz states / 30 FPS cameras are requests, not guaranteed measured rates.
+Recording buttons do not stop motion; physical-arm Start/Pause is unused here.
+
 ## Touch control for iPad and iPhone
 
 The node also serves thumb-driven touch controls at `/tablet/`, for a tablet
