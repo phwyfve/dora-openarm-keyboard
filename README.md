@@ -86,7 +86,7 @@ Windows / PowerShell, with the sibling collection and recorder repositories in
 ```powershell
 conda activate ml-sim
 cd C:\_sim-test\dora-openarm-keyboard
-git -C ..\dora-openarm-data-collection submodule update --init nodes/dora-openarm-data-collection-ui nodes/dora-openarm-quitter
+git -C ..\dora-openarm-data-collection submodule update --init nodes/dora-openarm-data-collection-ui nodes/dora-openarm-quitter nodes/dora-openarm-kinematics
 Remove-Item Env:RECORDING_DIRECTORY -ErrorAction SilentlyContinue
 $env:RECORDING_NAME = "session_" + (Get-Date -Format "yyyyMMdd_HHmmss")
 uv run dora build example\dataflow-mujoco-recording.yaml --uv
@@ -97,6 +97,8 @@ uv run dora run example\dataflow-mujoco-recording.yaml --uv
 2. [Keyboard :8080](http://localhost:8080/): focus the page, move the arms.
 3. Collection: **Success!** / **Fail!** saves; **Cancel!** deletes.
 4. **Quit** on the collection page closes the flow. Escape only quits the keyboard.
+5. Between episodes, **Reset scene** on :8000 restores all objects, both arms
+   and keyboard/IK targets to startup. Wait until **Start!** is enabled again.
 
 **View** (from the same repository; replace `session_...` with your saved folder):
 ```powershell
@@ -108,8 +110,37 @@ $dataset = "example\data\keyboard-mujoco\session_..."
 
 Rerun shows original timestamps: no resampling or invented frames.
 Actions = IK `qpos`; observations = MuJoCo `qpos/qvel/qtorque`; images = JPEG.
-250 Hz states / 30 FPS cameras are requests, not guaranteed measured rates.
+Recording targets/IK/state requests use 30 Hz to avoid saturating reset commands.
+Camera rates remain workload-dependent; measured rates may be lower.
 Recording buttons do not stop motion; physical-arm Start/Pause is unused here.
+MuJoCo's native Reset uses zero-joint defaults: use **Reset scene** instead.
+
+## Pretrained ACT inference (Windows, simulation only)
+
+```text
+MuJoCo -- 16 joint positions + 5 cameras --> ACT -- joint targets --> MuJoCo
+```
+
+Uses [Enactic's cube policy](https://huggingface.co/enactic/act-openarm-2-cell-pick_up_cube_mujoco)
+at revision `27cbd9a205d2e006aef518a54a3c53cf8e421a13`, including its saved
+normalization. A separate Python 3.12 environment leaves recording unchanged.
+Requires an NVIDIA GPU; the existing recording environment supplies MuJoCo.
+
+```powershell
+cd C:\_sim-test\dora-openarm-keyboard
+uv venv .venv-inference --python 3.12
+uv pip install --python .venv-inference\Scripts\python.exe -r example\requirements-inference.txt --torch-backend cu128
+.\.venv-inference\Scripts\python.exe example\act-inference.py --check
+powershell -ExecutionPolicy Bypass -File example\run-inference.ps1
+```
+
+Motion starts automatically after all cameras and both arms are available.
+MuJoCo drives the clock: both arm targets -> 1/30 s of physics -> states/images
+from one snapshot -> next action. Physics pauses during inference and rendering;
+slow rendering changes wall-clock duration, not action timing in simulated time.
+Close MuJoCo or press Ctrl+C in the launch terminal to stop. Relaunch for a fresh
+episode; do not use MuJoCo's native Reset while the policy is running.
+This is an experimental rollout, not a measured task-success guarantee.
 
 ## Touch control for iPad and iPhone
 
@@ -171,8 +202,12 @@ dataflow must be started again.
 
 | | |
 |---|---|
-| **Inputs** | `tick` — keep-alive only, any rate works (the node integrates and publishes at its own 500 Hz pace); `image` (optional) — JPEG frame to stream to the browser, e.g. a `camera_*` output of `dora-openarm-mujoco --render` |
+| **Inputs** | `tick` — keep-alive only, any rate works (the node integrates and publishes at its own 500 Hz pace); `image` (optional) — JPEG frame to stream to the browser; `command` (optional) — coordinated `reset` with positive integer `reset_id` metadata |
 | **Outputs** | `pose_right`, `pose_left` `[{"pose": float32[8]}]` — `[px, py, pz, qw, qx, qy, qz, gripper_angle]` in the scene's `arm_origin` frame; `command` `string[1]` — sent at shutdown: `lifter-stop` so a physical lifter in the dataflow never keeps moving, then `quit` so `dora-openarm-quitter` tick nodes exit and the dataflow can finish; `status` `string[1]` |
+
+Coordinated resets immediately restore startup poses and open grippers, clearing
+held keys. Pose outputs carry `reset_id`; `reset_ready` emits that ID after reset.
+The keyboard `0` key retains its gradual, gripper-preserving home behavior.
 
 ```
 --linear-speed   translation speed, m/s        (default: 0.05)

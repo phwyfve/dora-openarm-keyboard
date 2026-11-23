@@ -46,6 +46,27 @@ def make_state(**kwargs) -> TeleopState:
     return TeleopState(**{**defaults, **kwargs})
 
 
+def test_scene_reset_clears_motion_and_restores_both_startup_targets():
+    state = make_state()
+    teleop = KeyboardTeleop(state)
+    original = {side: state.pose(side).copy() for side in (LEFT, RIGHT)}
+    teleop.enqueue("press", "w")
+    teleop.enqueue("press", "m")
+    teleop.step(1.0)
+    state.start_home()
+    teleop.enqueue("press", "i")
+    teleop.reset(1)
+    teleop.step(0.1)
+    assert not state.homing
+    assert teleop.reset_id == 1
+    assert not teleop.keys.held
+    for side in (LEFT, RIGHT):
+        np.testing.assert_allclose(state.pose(side), original[side])
+    teleop.enqueue("press", "w")
+    teleop.step(0.1)
+    assert state.arms[LEFT].pos[0] > original[LEFT][0]
+
+
 def test_motion_keys_are_per_arm():
     assert MOTION_KEYS["w"] == (LEFT, X, PITCH, +1)
     assert MOTION_KEYS["s"] == (LEFT, X, PITCH, -1)

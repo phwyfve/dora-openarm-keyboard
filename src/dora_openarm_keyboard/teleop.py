@@ -179,6 +179,14 @@ class TeleopState:
         """Begin walking both targets back to their home poses."""
         self.homing = True
 
+    def reset(self) -> None:
+        """Restore startup targets and open both grippers immediately."""
+        for arm in self.arms.values():
+            arm.pos = arm.home_pos.copy()
+            arm.rot = arm.home_rot
+            arm.grip = 0.0
+        self.homing = False
+
     def cancel_home(self) -> None:
         """Abort a home return, leaving both targets where they are."""
         self.homing = False

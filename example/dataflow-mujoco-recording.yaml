@@ -4,11 +4,20 @@ nodes:
   - id: ui
     build: pip install -e ../../dora-openarm-data-collection/nodes/dora-openarm-data-collection-ui
     path: dora-openarm-data-collection-ui
-    args: "--port 8000 --no-auto-open"
+    args: "--port 8000 --no-auto-open --enable-simulation-reset"
     env:
       METADATA_FILE: metadata-recording.yaml
     inputs:
-      tick: quittable-tick/tick
+      tick: dora/timer/secs/1
+      keyboard_reset:
+        source: keyboard/reset_ready
+        queue_size: 100
+      ik_reset:
+        source: ik/reset_ready
+        queue_size: 100
+      robot_reset:
+        source: viewer/reset_ready
+        queue_size: 100
       camera_wrist_right:
         source: viewer/camera_wrist_right
         queue_size: 1
@@ -31,25 +40,34 @@ nodes:
   - id: keyboard
     build: pip install -e ..
     path: dora-openarm-keyboard
-    args: "--port 8080"
+    args: "--port 8080 --publish-hz 30"
     inputs:
       image: viewer/camera_ceiling
+      command:
+        source: ui/command
+        queue_size: 100
     outputs:
       - pose_right
       - pose_left
       - command
       - status
+      - reset_ready
 
   - id: ik
-    build: pip install dora-openarm-kinematics==0.2.4
+    build: pip install -e ../../dora-openarm-data-collection/nodes/dora-openarm-kinematics
     path: dora-openarm-ik
+    args: "--tick-hz 30"
     inputs:
+      command:
+        source: ui/command
+        queue_size: 100
       target_right: keyboard/pose_right
       target_left: keyboard/pose_left
     outputs:
       - position_left
       - position_right
       - status
+      - reset_ready
 
   - id: quittable-tick
     path: ../../dora-openarm-data-collection/nodes/dora-openarm-quitter/src/dora_openarm_quitter/main.py
@@ -57,7 +75,7 @@ nodes:
       command:
         source: ui/command
         queue_size: 100
-      tick: dora/timer/millis/4
+      tick: dora/timer/millis/33
     outputs:
       - tick
 
@@ -78,7 +96,7 @@ nodes:
       - pose_left
 
   - id: viewer
-    build: pip install dora-openarm-mujoco==0.5.1
+    build: pip install -e ../../dora-openarm-mujoco
     path: dora-openarm-mujoco
     args: "--scene demo --keyframe home --enable-collision --ctrl --render --viewer --debug-frame"
     inputs:
@@ -87,8 +105,12 @@ nodes:
       pose_right: quittable-controls/pose_right
       pose_left: quittable-controls/pose_left
       request_state: quittable-tick/tick
+      reset:
+        source: ui/command
+        queue_size: 100
     outputs:
       - status
+      - reset_ready
       - state_right
       - state_left
       - camera_wrist_right

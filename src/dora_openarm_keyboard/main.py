@@ -108,6 +108,7 @@ class KeyboardTeleop:
         self.running = True
         # Set by Esc; the dora loop exits once it turns True.
         self.quit_requested = False
+        self.reset_id = 0
 
     # WebRTC handlers
 
@@ -196,6 +197,14 @@ class KeyboardTeleop:
         # nodes exit so the dataflow's timers stop with this node.
         self._commands += [LIFTER_STOP_COMMAND, QUIT_COMMAND]
 
+    def reset(self, reset_id: int) -> None:
+        """Discard queued keys and restore startup targets for a new reset."""
+        self.drain()
+        self.keys.clear()
+        self.state.reset()
+        self.reset_id = reset_id
+        self._note("scene targets reset")
+
 
 def _extract_jpeg(value: pa.Array) -> bytes:
     """Return the raw JPEG payload of an image input (a uint8 Arrow array)."""
@@ -245,7 +254,9 @@ async def _run_async(args: argparse.Namespace) -> None:
     node = dora.Node()
     node.send_output("status", pa.array(["ready"]))
 
-    integrator = asyncio.create_task(_integrate(node, teleop, state))
+    integrator = asyncio.create_task(
+        _integrate(node, teleop, state, publish_hz=args.publish_hz)
+    )
     try:
         # In WebRTC-only mode the one browser that left can never be replaced
         # (there is no HTTP server), so the server stops running when it
@@ -266,6 +277,13 @@ async def _run_async(args: argparse.Namespace) -> None:
                 continue
             if event["id"] == "image":
                 server.push_jpeg(_extract_jpeg(event["value"]))
+            elif event["id"] == "command" and event["value"][0].as_py() == "reset":
+                reset_id = event["metadata"]["reset_id"]
+                if not isinstance(reset_id, int) or reset_id <= 0:
+                    raise ValueError("reset_id must be a positive integer")
+                if reset_id > teleop.reset_id:
+                    teleop.reset(reset_id)
+                    node.send_output("reset_ready", pa.array([reset_id]))
     finally:
         teleop.running = False
         await integrator
@@ -276,19 +294,20 @@ async def _integrate(
     node: dora.Node,
     teleop: KeyboardTeleop,
     state: TeleopState,
+    publish_hz: float = 500.0,
 ) -> None:
     """Advance the target pose and publish it at the node's own pace."""
     last = time.perf_counter()
     try:
         while teleop.running:
-            await asyncio.sleep(_STEP_SECONDS)
+            await asyncio.sleep(1.0 / publish_hz)
             now = time.perf_counter()
             dt = min(now - last, _MAX_DT)
             last = now
 
             teleop.step(dt)
 
-            metadata = {"timestamp": time.time_ns()}
+            metadata = {"timestamp": time.time_ns(), "reset_id": teleop.reset_id}
             node.send_output(
                 "pose_right", build_pose_output(state.pose(RIGHT)), metadata
             )
@@ -349,6 +368,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_LINEAR_SPEED,
         help="translation speed in m/s (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--publish-hz",
+        type=float,
+        default=500.0,
+        help="Pose publication rate (default: 500); lower it for rendered recording",
     )
     parser.add_argument(
         "--angular-speed",
@@ -456,7 +481,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """Run the keyboard teleoperation node."""
-    _run(build_parser().parse_args())
+    parser = build_parser()
+    args = parser.parse_args()
+    if not np.isfinite(args.publish_hz) or args.publish_hz <= 0:
+        parser.error("--publish-hz must be finite and positive")
+    _run(args)
 
 
 if __name__ == "__main__":
