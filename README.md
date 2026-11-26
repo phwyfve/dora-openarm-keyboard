@@ -66,6 +66,30 @@ from another machine, pass `--host 0.0.0.0` and open `http://<node-host>:8080/`
 (browsers allow WebRTC on plain HTTP; camera/mic-free pages like this one need
 no HTTPS).
 
+## ACT inference in the simulation workspace
+
+From the parent `C:\_sim-test` workspace, test the original pinned
+pretrained policy with short execution blocks:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run-simulation.ps1 -Mode inference -ActionSteps 10
+```
+
+ACT still predicts 100 actions, but executes only the first 10 before
+recalculating from fresh images and arm states (0.33 simulated seconds
+at 30 Hz). This changes inference, not model weights. The pretrained
+policy worked well with this setting in the cube scene; the locally
+fine-tuned policy did not show the same success. More frequent inference
+can slow wall-clock simulation. Use `-ActionSteps 100` for the original
+execution horizon, which remains the default for direct launch commands.
+
+To test local weights instead, add
+`-Checkpoint "C:\path\to\pretrained_model"`; `-Check` loads and predicts
+without opening MuJoCo. Local checkpoints load their own saved
+normalization processors and fail explicitly if missing or incomplete.
+The parent `test-act.bat` selects the local training checkpoint and uses
+10-action blocks. The console reports which model and horizon are used.
+
 ## Recording a simulated episode
 
 ```text

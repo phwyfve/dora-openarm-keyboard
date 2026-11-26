@@ -2,6 +2,8 @@
 
 import argparse
 from collections import deque
+import os
+from pathlib import Path
 import time
 
 import cv2
@@ -21,16 +23,29 @@ CAMERAS = ("ceiling", "head_left", "head_right", "wrist_left", "wrist_right")
 QPOS_TYPE = pa.struct([("qpos", pa.list_(pa.float32()))])
 
 
-def load_policy():
+def load_policy(checkpoint=None):
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable; install the CUDA PyTorch build first.")
     torch.set_num_threads(4)
-    path = snapshot_download(
-        MODEL, revision=REVISION, allow_patterns=["*.json", "*.safetensors"]
-    )
+    if checkpoint is None:
+        path = snapshot_download(
+            MODEL, revision=REVISION, allow_patterns=["*.json", "*.safetensors"]
+        )
+        source = f"{MODEL}@{REVISION}"
+    else:
+        path = str(Path(checkpoint).resolve(strict=True))
+        for name in (
+            "config.json", "model.safetensors",
+            "policy_preprocessor.json", "policy_postprocessor.json",
+        ):
+            if not (Path(path) / name).is_file():
+                raise FileNotFoundError(f"Incomplete local ACT checkpoint: {Path(path) / name}")
+        source = path
     config = PreTrainedConfig.from_pretrained(path)
     config.pretrained_path = path
     config.device = "cuda"
+    if config.type != "act":
+        raise ValueError("This adapter requires an ACT policy.")
     if config.input_features["observation.state"].shape != (16,):
         raise ValueError("This adapter requires a 16-joint observation.")
     if config.output_features["action"].shape != (16,):
@@ -45,7 +60,7 @@ def load_policy():
         pretrained_path=path,
         preprocessor_overrides={"device_processor": {"device": "cuda"}},
     )
-    print(f"[ACT] Loaded {MODEL}@{REVISION} on {torch.cuda.get_device_name(0)}", flush=True)
+    print(f"[ACT] Loaded {source} on {torch.cuda.get_device_name(0)}", flush=True)
     return policy, preprocessor, postprocessor
 
 
@@ -78,7 +93,14 @@ def image_tensor(encoded, shape):
     return torch.from_numpy(rgb.copy()).permute(2, 0, 1).float() / 255.0
 
 
-def run(node, policy, preprocessor, postprocessor):
+def run(node, policy, preprocessor, postprocessor, action_steps=100):
+    if not 1 <= action_steps <= policy.config.chunk_size:
+        raise ValueError(f"Action steps must be between 1 and {policy.config.chunk_size}.")
+    print(
+        f"[ACT] Recalculating every {action_steps} actions "
+        f"({action_steps / 30:.3f}s simulated).",
+        flush=True,
+    )
     cameras = {}
     arms = {}
     tick = None
@@ -131,7 +153,10 @@ def run(node, policy, preprocessor, postprocessor):
                     cameras[camera], policy.config.input_features[key].shape
                 )
             # Physics remains paused while this new chunk is predicted.
-            actions.extend(predict(policy, preprocessor, postprocessor, batch))
+            predicted = predict(policy, preprocessor, postprocessor, batch)
+            if len(predicted) < action_steps:
+                raise ValueError("ACT predicted fewer actions than the execution horizon.")
+            actions.extend(predicted[:action_steps])
         target = actions.popleft()
         for side, values in (("right", target[:8]), ("left", target[8:])):
             node.send_output(
@@ -156,9 +181,19 @@ def run(node, policy, preprocessor, postprocessor):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Load and warm up; no simulation.")
+    parser.add_argument(
+        "--action-steps", type=int, default=os.environ.get("ACT_ACTION_STEPS", "100"),
+        help="Commands executed before recalculating from new observations (default: 100).",
+    )
+    parser.add_argument(
+        "--checkpoint", type=Path, default=os.environ.get("ACT_POLICY_CHECKPOINT"),
+        help="Local pretrained_model directory; otherwise use the pinned pretrained ACT.",
+    )
     args = parser.parse_args()
     node = None if args.check else dora.Node()
-    policy, preprocessor, postprocessor = load_policy()
+    policy, preprocessor, postprocessor = load_policy(args.checkpoint)
+    if not 1 <= args.action_steps <= policy.config.chunk_size:
+        parser.error(f"--action-steps must be between 1 and {policy.config.chunk_size}")
     if args.check:
         batch = {
             key: torch.zeros(feature.shape, dtype=torch.float32)
@@ -167,7 +202,7 @@ def main():
         result = predict(policy, preprocessor, postprocessor, batch)
         print(f"[ACT] Check passed: {result.shape}, finite={np.isfinite(result).all()}")
     else:
-        run(node, policy, preprocessor, postprocessor)
+        run(node, policy, preprocessor, postprocessor, args.action_steps)
 
 
 if __name__ == "__main__":
